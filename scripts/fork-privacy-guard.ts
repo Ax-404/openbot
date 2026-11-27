@@ -5,6 +5,7 @@ import { join, relative } from "node:path";
 const FORBIDDEN_PATTERNS = [
   { pattern: /analytics\.openbot\.run/g, label: "analytics.openbot.run endpoint" },
   { pattern: /updates\.openbot\.run/g, label: "updates.openbot.run OTA endpoint" },
+  { pattern: /https:\/\/github\.com\/nightly-labs\/openbot\/releases/g, label: "upstream releases URL" },
 ];
 
 const FORBIDDEN_PLUGIN_DIRS = ["coinbase", "robinhood"];
@@ -53,8 +54,6 @@ const EXCLUDED_PATHS = [
   "src/main/ipc/app-handlers.ts",
   "src/main/newer-database-recovery.ts",
   "src/main/provider-runtime-releases.ts",
-  "src/main/host-release-service.ts",
-  "src/main/download-url.ts",
 ];
 
 const SCAN_EXTENSIONS = new Set([".ts", ".tsx", ".json", ".jsonc"]);
@@ -139,6 +138,35 @@ async function checkPluginCatalogs(root: string): Promise<Violation[]> {
   return violations;
 }
 
+async function checkGeneratedCatalogs(root: string): Promise<Violation[]> {
+  const violations: Violation[] = [];
+  const generatedFiles = [
+    join(root, "src/renderer/src/features/settings/marketplace-plugin-catalog.ts"),
+    join(root, "apps/mobile/src/features/marketplace/model/plugin-catalog.generated.ts"),
+    join(root, "apps/auth-api/src/lib/plugin-catalog.generated.ts"),
+    join(root, "marketplace/production-catalog/catalog.json"),
+  ];
+
+  for (const filePath of generatedFiles) {
+    try {
+      const content = await readFile(filePath, "utf8");
+      const contentLower = content.toLowerCase();
+      for (const forbidden of FORBIDDEN_PLUGIN_DIRS) {
+        if (contentLower.includes(forbidden)) {
+          violations.push({
+            file: filePath,
+            line: 0,
+            label: `Generated catalog contains forbidden plugin: ${forbidden}`,
+            match: forbidden,
+          });
+        }
+      }
+    } catch {}
+  }
+
+  return violations;
+}
+
 async function checkNearIntentsActive(root: string): Promise<Violation[]> {
   const nearGatewayPath = join(root, "src/main/near-intents-gateway.ts");
   try {
@@ -177,6 +205,7 @@ async function main(): Promise<void> {
   }
 
   violations.push(...(await checkPluginCatalogs(root)));
+  violations.push(...(await checkGeneratedCatalogs(root)));
   violations.push(...(await checkNearIntentsActive(root)));
 
   if (violations.length === 0) {
