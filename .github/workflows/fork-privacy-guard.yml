@@ -1,0 +1,26 @@
+name: Fork Privacy Guard
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  privacy-guard:
+    name: Check privacy invariants
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Run privacy guard
+        run: bun run scripts/fork-privacy-guard.ts
+
+      - name: Run guard tests
+        run: bun test scripts/fork-privacy-guard.test.ts
