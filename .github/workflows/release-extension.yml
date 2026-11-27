@@ -29,6 +29,7 @@ concurrency:
 jobs:
   package:
     name: Build the Chrome Web Store package
+    if: github.repository == 'nightly-labs/openbot'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -93,7 +94,7 @@ jobs:
   publish:
     name: Publish to the Chrome Web Store
     needs: package
-    if: github.ref_type == 'tag' && (github.event_name == 'push' || inputs.publish)
+    if: github.repository == 'nightly-labs/openbot' && github.ref_type == 'tag' && (github.event_name == 'push' || inputs.publish)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment: chrome-web-store

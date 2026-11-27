@@ -273,18 +273,6 @@
       "detailSha256": "5014d267e7627c50d84ea1823d04e4d6c6f18e7096319f3e1351972e656c4449"
     },
     {
-      "slug": "coinbase",
-      "version": "1.0.0",
-      "featured": false,
-      "detailSha256": "e805bf80072abe0a87728991ac49dd29b379f7aaaa62a58e6c70e4bdf2de96f1"
-    },
-    {
-      "slug": "robinhood",
-      "version": "1.0.0",
-      "featured": false,
-      "detailSha256": "de85730802e38802ee01f6695c0c4d3adba9381cf4b1665a52a228df00f01939"
-    },
-    {
       "slug": "1inch",
       "version": "1.0.0",
       "featured": false,

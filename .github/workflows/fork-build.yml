@@ -1,0 +1,144 @@
+name: Fork Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      push_image:
+        description: "Push Docker image to GHCR"
+        type: boolean
+        default: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  linux:
+    name: Build Linux AppImage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Get version
+        id: version
+        run: |
+          version="$(bun -p 'require("./package.json").version')"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install a virtual display
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes xvfb
+
+      - name: Build AppImage
+        run: bun run dist:linux
+
+      - name: Permit the Electron sandbox for the verification build
+        run: |
+          set -euo pipefail
+          sudo chown root:root "dist/linux-unpacked/chrome-sandbox"
+          sudo chmod 4755 "dist/linux-unpacked/chrome-sandbox"
+          sudo tee /etc/apparmor.d/openbot-verify >/dev/null <<PROFILE
+          abi <abi/4.0>,
+          include <tunables/global>
+
+          profile openbot-verify "$GITHUB_WORKSPACE/dist/linux-unpacked/openbot" flags=(unconfined) {
+            userns,
+          }
+          PROFILE
+          sudo apparmor_parser -r /etc/apparmor.d/openbot-verify
+
+      - name: Verify packaged application metadata and launch
+        run: xvfb-run -a bun run verify:package:linux "dist/linux-unpacked"
+
+      - name: Upload AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: appimage
+          path: dist/*.AppImage
+          if-no-files-found: error
+          retention-days: 7
+
+  docker-build:
+    name: Build Docker image
+    needs: linux
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download AppImage
+        uses: actions/download-artifact@v4
+        with:
+          name: appimage
+          path: image
+
+      - name: Prepare AppImage
+        run: |
+          mv image/*.AppImage image/OpenBot.AppImage
+          chmod +x image/OpenBot.AppImage
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name == 'push' || github.event.inputs.push_image == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=sha,prefix=
+
+      - name: Build (and push on main/tag)
+        uses: docker/build-push-action@v6
+        with:
+          context: image
+          file: ./docker/Dockerfile
+          push: ${{ github.event_name == 'push' || github.event.inputs.push_image == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ needs.linux.outputs.version }}
+            REVISION=${{ github.sha }}
+            IMAGE_SOURCE=https://github.com/${{ github.repository }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verify the image starts
+        if: success()
+        run: |
+          set -euo pipefail
+          docker load < /tmp/.buildx-cache/* 2>/dev/null || true
+          image_tag="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${GITHUB_SHA::7}"
+          if docker image inspect "$image_tag" >/dev/null 2>&1; then
+            docker run --rm --name openbot-test --detach --shm-size 1g \
+              --security-opt seccomp=docker/seccomp.json --security-opt no-new-privileges:true \
+              "$image_tag" || true
+            sleep 10
+            docker stop openbot-test --time 30 || true
+          fi

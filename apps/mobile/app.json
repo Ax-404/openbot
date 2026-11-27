@@ -272,6 +272,9 @@
       "policy": "fingerprint"
     },
     "updates": {
+      "enabled": false,
+      "checkAutomatically": "NEVER",
+      "fallbackToCacheTimeout": 0,
       "url": "https://updates.openbot.run/manifest",
       "codeSigningCertificate": "./certs/certificate.pem",
       "codeSigningMetadata": {

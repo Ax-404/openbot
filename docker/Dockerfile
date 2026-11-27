@@ -28,8 +28,9 @@ RUN install -d -m 0755 /opt/OpenBot/hosted \
 
 ARG VERSION=unknown
 ARG REVISION=unknown
+ARG IMAGE_SOURCE=https://github.com/Ax-404/openbot
 LABEL org.opencontainers.image.title=OpenBot \
-  org.opencontainers.image.source=https://github.com/nightly-labs/openbot \
+  org.opencontainers.image.source=${IMAGE_SOURCE} \
   org.opencontainers.image.licenses=PolyForm-Noncommercial-1.0.0 \
   org.opencontainers.image.version=${VERSION} \
   org.opencontainers.image.revision=${REVISION}

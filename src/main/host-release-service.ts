@@ -2,14 +2,8 @@ import { readFile } from "node:fs/promises";
 import type { HostReleaseStatus, UpdateStatus } from "@openbot/contracts/ipc";
 import { isNewerRelease, isValidSemver } from "@openbot/contracts/release-version";
 import { Deferred, Effect, Exit, Schema } from "effect";
-import { parse } from "yaml";
 
 class ReleaseCheckFailed extends Schema.TaggedError<ReleaseCheckFailed>()("ReleaseCheckFailed", {}) {}
-
-const ReleaseManifest = Schema.Struct({
-  version: Schema.String.check(Schema.isMaxLength(64), Schema.isPattern(/^\d+\.\d+\.\d+$/u)),
-  files: Schema.Array(Schema.Struct({ url: Schema.String })),
-});
 
 type ReleaseTarget = { feed: string; asset: (version: string) => string };
 
@@ -121,37 +115,14 @@ export class HostReleaseService {
   }).bind(this);
 }
 
-async function fetchLatestRelease(target: ReleaseTarget, request: typeof fetch, signal: AbortSignal): Promise<string> {
-  const response = await request(`https://github.com/nightly-labs/openbot/releases/latest/download/${target.feed}`, {
-    signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
-  });
-  if (!response.ok || !response.body) {
-    await response.body?.cancel();
-    throw new Error("Release feed unavailable");
-  }
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  try {
-    for (;;) {
-      const next = await reader.read();
-      if (next.done) break;
-      size += next.value.byteLength;
-      if (size > 65_536) throw new Error("Release feed too large");
-      chunks.push(next.value);
-    }
-  } finally {
-    await reader.cancel();
-    reader.releaseLock();
-  }
-  const manifest = Schema.decodeUnknownSync(ReleaseManifest)(parse(Buffer.concat(chunks).toString("utf8")));
-  if (!isValidSemver(manifest.version) || !manifest.files.some((file) => file.url === target.asset(manifest.version)))
-    throw new Error("No compatible release");
-  return manifest.version;
+async function fetchLatestRelease(
+  _target: ReleaseTarget,
+  _request: typeof fetch,
+  _signal: AbortSignal,
+): Promise<string> {
+  throw new Error("Release check disabled in this fork");
 }
 
-export function fetchLatestLinuxRelease(arch: string, request: typeof fetch, signal: AbortSignal): Promise<string> {
-  const target = releaseTarget("linux", arch);
-  if (!target) return Promise.reject(new Error("No release for this machine"));
-  return fetchLatestRelease(target, request, signal);
+export function fetchLatestLinuxRelease(_arch: string, _request: typeof fetch, _signal: AbortSignal): Promise<string> {
+  return Promise.reject(new Error("Release check disabled in this fork"));
 }
