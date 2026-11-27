@@ -1,178 +1,241 @@
-import { mkdir, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  checkGeneratedCatalogs,
+  checkMobileUpdatesDisabled,
+  checkNearIntentsActive,
+  checkPluginCatalogs,
+  normalizePosixPath,
+  scanFile,
+} from "./fork-privacy-guard";
 
-const FORBIDDEN_PATTERNS: Array<{ pattern: RegExp; label: string; allowIf?: string }> = [
-  { pattern: /analytics\.openbot\.run/g, label: "analytics.openbot.run endpoint" },
-  { pattern: /updates\.openbot\.run/g, label: "updates.openbot.run OTA endpoint", allowIf: "apps/mobile/app.json" },
-  { pattern: /https:\/\/github\.com\/nightly-labs\/openbot\/releases/g, label: "upstream releases URL" },
-];
-
-const FORBIDDEN_PLUGIN_DIRS = ["coinbase", "robinhood"];
-
-const NEAR_INTENTS_ACTIVE_PATTERN = /owners:\s*\(\)\s*=>\s*OWNERS\.filter/;
-
-function checkContent(content: string): { label: string; match: string }[] {
-  const violations: { label: string; match: string }[] = [];
-  for (const { pattern, label } of FORBIDDEN_PATTERNS) {
-    pattern.lastIndex = 0;
-    for (let match = pattern.exec(content); match !== null; match = pattern.exec(content)) {
-      violations.push({ label, match: match[0] });
-    }
-  }
-  return violations;
+async function writeFixture(root: string, relPath: string, content: string): Promise<string> {
+  const fullPath = join(root, relPath);
+  await mkdir(dirname(fullPath), { recursive: true });
+  await writeFile(fullPath, content, "utf8");
+  return fullPath;
 }
 
-function checkNearIntentsActive(content: string): boolean {
-  return NEAR_INTENTS_ACTIVE_PATTERN.test(content);
-}
-
-function checkForbiddenPluginDir(dirName: string): boolean {
-  return FORBIDDEN_PLUGIN_DIRS.includes(dirName);
-}
-
-describe("fork-privacy-guard patterns", () => {
-  it("detects analytics.openbot.run", () => {
-    const violations = checkContent('const url = "https://analytics.openbot.run/api";');
-    expect(violations).toHaveLength(1);
-    expect(violations[0]?.label).toBe("analytics.openbot.run endpoint");
-  });
-
-  it("detects updates.openbot.run", () => {
-    const violations = checkContent('"url": "https://updates.openbot.run/manifest"');
-    expect(violations).toHaveLength(1);
-    expect(violations[0]?.label).toBe("updates.openbot.run OTA endpoint");
-  });
-
-  it("detects upstream releases URL", () => {
-    const violations = checkContent('const RELEASES_URL = "https://github.com/nightly-labs/openbot/releases";');
-    expect(violations).toHaveLength(1);
-    expect(violations[0]?.label).toBe("upstream releases URL");
-  });
-
-  it("allows clean content", () => {
-    const violations = checkContent("const x = 1;");
-    expect(violations).toHaveLength(0);
-  });
-
-  it("detects multiple violations in same line", () => {
-    const violations = checkContent('fetch("https://analytics.openbot.run") && fetch("https://updates.openbot.run")');
-    expect(violations).toHaveLength(2);
-  });
-
-  it("allows empty releases URL", () => {
-    const violations = checkContent('export const RELEASES_URL = "";');
-    expect(violations).toHaveLength(0);
-  });
-});
-
-describe("fork-privacy-guard NEAR Intents check", () => {
-  it("detects active NEAR Intents gateway", () => {
-    const activeContent = `
-export function createNearIntentsGateway(options: NearIntentsGatewayOptions): NearIntentsGateway {
-  return {
-    owners: () => OWNERS.filter((owner) => owner.enabled),
-    fetch: () => activeFetch,
-  };
-}`;
-    expect(checkNearIntentsActive(activeContent)).toBe(true);
-  });
-
-  it("allows disabled NEAR Intents gateway", () => {
-    const disabledContent = `
-export function createNearIntentsGateway(_options: NearIntentsGatewayOptions): NearIntentsGateway {
-  return {
-    owners: () => [],
-    fetch: () => disabled,
-  };
-}`;
-    expect(checkNearIntentsActive(disabledContent)).toBe(false);
-  });
-});
-
-describe("fork-privacy-guard plugin catalog check", () => {
-  it("detects coinbase plugin directory", () => {
-    expect(checkForbiddenPluginDir("coinbase")).toBe(true);
-  });
-
-  it("detects robinhood plugin directory", () => {
-    expect(checkForbiddenPluginDir("robinhood")).toBe(true);
-  });
-
-  it("allows other plugin directories", () => {
-    expect(checkForbiddenPluginDir("stripe")).toBe(false);
-    expect(checkForbiddenPluginDir("notion")).toBe(false);
-  });
-});
-
-describe("fork-privacy-guard generated catalog check", () => {
-  const testDir = join(import.meta.dirname, ".test-catalog-check");
+describe("fork-privacy-guard", () => {
+  let root: string;
 
   beforeEach(async () => {
-    await mkdir(testDir, { recursive: true });
+    root = await mkdtemp(join(tmpdir(), "fork-privacy-guard-test-"));
   });
 
   afterEach(async () => {
-    await rm(testDir, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true });
   });
 
-  it("detects coinbase in generated catalog content", async () => {
-    const catalogContent = `
-const COINBASE: MarketplacePluginDetail = {
-  slug: "coinbase",
-  name: "Coinbase",
-};
-export const MARKETPLACE_PLUGINS = [COINBASE];
-`;
-    const filePath = join(testDir, "catalog.ts");
-    await writeFile(filePath, catalogContent);
-
-    const content = await import("node:fs/promises").then((fs) => fs.readFile(filePath, "utf8"));
-    const contentLower = content.toLowerCase();
-    const hasForbidden = FORBIDDEN_PLUGIN_DIRS.some((dir) => contentLower.includes(dir));
-    expect(hasForbidden).toBe(true);
+  describe("normalizePosixPath", () => {
+    it("normalizes Windows backslashes to POSIX slashes", () => {
+      expect(normalizePosixPath("apps\\mobile\\app.json")).toBe("apps/mobile/app.json");
+      expect(normalizePosixPath("apps/mobile/app.json")).toBe("apps/mobile/app.json");
+    });
   });
 
-  it("allows clean generated catalog", async () => {
-    const catalogContent = `
-const STRIPE: MarketplacePluginDetail = {
-  slug: "stripe",
-  name: "Stripe",
-};
-export const MARKETPLACE_PLUGINS = [STRIPE];
-`;
-    const filePath = join(testDir, "catalog.ts");
-    await writeFile(filePath, catalogContent);
+  describe("scanFile", () => {
+    it("detects analytics.openbot.run", async () => {
+      const file = await writeFixture(root, "src/example.ts", 'const url = "https://analytics.openbot.run/api";');
+      const violations = await scanFile(file, root);
+      expect(violations).toHaveLength(1);
+      expect(violations[0]?.label).toBe("analytics.openbot.run endpoint");
+    });
 
-    const content = await import("node:fs/promises").then((fs) => fs.readFile(filePath, "utf8"));
-    const contentLower = content.toLowerCase();
-    const hasForbidden = FORBIDDEN_PLUGIN_DIRS.some((dir) => contentLower.includes(dir));
-    expect(hasForbidden).toBe(false);
+    it("detects updates.openbot.run outside apps/mobile/app.json", async () => {
+      const file = await writeFixture(
+        root,
+        "apps/mobile/other.json",
+        JSON.stringify({ expo: { updates: { enabled: false, url: "https://updates.openbot.run/manifest" } } }),
+      );
+      const violations = await scanFile(file, root);
+      expect(violations).toHaveLength(1);
+      expect(violations[0]?.label).toBe("updates.openbot.run OTA endpoint");
+    });
+
+    it("allows updates.openbot.run in apps/mobile/app.json only when updates.enabled is false", async () => {
+      const disabledFile = await writeFixture(
+        root,
+        "apps/mobile/app.json",
+        JSON.stringify({ expo: { updates: { enabled: false, url: "https://updates.openbot.run/manifest" } } }),
+      );
+      expect(await scanFile(disabledFile, root)).toHaveLength(0);
+
+      const enabledFile = await writeFixture(
+        root,
+        "apps/mobile/app.json",
+        JSON.stringify({ expo: { updates: { enabled: true, url: "https://updates.openbot.run/manifest" } } }),
+      );
+      const enabledViolations = await scanFile(enabledFile, root);
+      expect(enabledViolations).toHaveLength(1);
+      expect(enabledViolations[0]?.label).toBe("updates.openbot.run OTA endpoint");
+
+      const missingEnabledFile = await writeFixture(
+        root,
+        "apps/mobile/app.json",
+        JSON.stringify({ expo: { updates: { url: "https://updates.openbot.run/manifest" } } }),
+      );
+      const missingViolations = await scanFile(missingEnabledFile, root);
+      expect(missingViolations).toHaveLength(1);
+      expect(missingViolations[0]?.label).toBe("updates.openbot.run OTA endpoint");
+    });
+
+    it("detects upstream releases URL", async () => {
+      const file = await writeFixture(
+        root,
+        "src/main/download-url.ts",
+        'export const RELEASES_URL = "https://github.com/nightly-labs/openbot/releases";',
+      );
+      const violations = await scanFile(file, root);
+      expect(violations).toHaveLength(1);
+      expect(violations[0]?.label).toBe("upstream releases URL");
+    });
+
+    it("allows clean content and empty releases URL", async () => {
+      const file = await writeFixture(
+        root,
+        "src/main/download-url.ts",
+        'export const RELEASES_URL = "";\nconst x = 1;',
+      );
+      expect(await scanFile(file, root)).toHaveLength(0);
+    });
+
+    it("detects multiple violations in same line", async () => {
+      const file = await writeFixture(
+        root,
+        "src/example.ts",
+        'fetch("https://analytics.openbot.run") && fetch("https://updates.openbot.run")',
+      );
+      const violations = await scanFile(file, root);
+      expect(violations).toHaveLength(2);
+    });
   });
-});
 
-describe("fork-privacy-guard mobile updates check", () => {
-  function checkMobileUpdatesConfig(config: { expo?: { updates?: { enabled?: boolean } } }): boolean {
-    return config.expo?.updates?.enabled === false;
-  }
+  describe("checkNearIntentsActive", () => {
+    it("detects active NEAR Intents gateway", async () => {
+      await writeFixture(
+        root,
+        "src/main/near-intents-gateway.ts",
+        `export function createNearIntentsGateway() {
+  return {
+    owners: () => OWNERS.filter((owner) => owner.enabled),
+  };
+}`,
+      );
+      const violations = await checkNearIntentsActive(root);
+      expect(violations).toHaveLength(1);
+      expect(violations[0]?.label).toContain("NEAR Intents gateway is active");
+    });
 
-  it("passes when updates.enabled is false", () => {
-    const config = { expo: { updates: { enabled: false, url: "https://updates.openbot.run/manifest" } } };
-    expect(checkMobileUpdatesConfig(config)).toBe(true);
+    it("allows disabled NEAR Intents gateway", async () => {
+      await writeFixture(
+        root,
+        "src/main/near-intents-gateway.ts",
+        `export function createNearIntentsGateway() {
+  return {
+    owners: () => [],
+  };
+}`,
+      );
+      expect(await checkNearIntentsActive(root)).toHaveLength(0);
+    });
+
+    it("fails closed when near-intents-gateway.ts is missing", async () => {
+      const violations = await checkNearIntentsActive(root);
+      expect(violations).toHaveLength(1);
+      expect(violations[0]?.label).toContain("missing or unreadable");
+    });
   });
 
-  it("fails when updates.enabled is true", () => {
-    const config = { expo: { updates: { enabled: true, url: "https://updates.openbot.run/manifest" } } };
-    expect(checkMobileUpdatesConfig(config)).toBe(false);
+  describe("checkPluginCatalogs", () => {
+    it("detects coinbase and robinhood plugin directories", async () => {
+      await mkdir(join(root, "marketplace/plugin-catalog/plugins/coinbase"), { recursive: true });
+      await mkdir(join(root, "resources/plugin-catalog/robinhood"), { recursive: true });
+      await mkdir(join(root, "marketplace/plugin-catalog/plugins/stripe"), { recursive: true });
+
+      const violations = await checkPluginCatalogs(root);
+      expect(violations).toHaveLength(2);
+      expect(violations.map((v) => v.match).sort()).toEqual(["coinbase", "robinhood"]);
+    });
+
+    it("allows clean plugin directories", async () => {
+      await mkdir(join(root, "marketplace/plugin-catalog/plugins/stripe"), { recursive: true });
+      await mkdir(join(root, "resources/plugin-catalog/notion"), { recursive: true });
+      expect(await checkPluginCatalogs(root)).toHaveLength(0);
+    });
   });
 
-  it("fails when updates.enabled is missing", () => {
-    const config = { expo: { updates: { url: "https://updates.openbot.run/manifest" } } };
-    expect(checkMobileUpdatesConfig(config)).toBe(false);
+  describe("checkGeneratedCatalogs", () => {
+    it("detects forbidden plugins in generated catalog files", async () => {
+      await writeFixture(
+        root,
+        "src/renderer/src/features/settings/marketplace-plugin-catalog.ts",
+        'export const MARKETPLACE_PLUGINS = [{ slug: "coinbase" }];',
+      );
+      await writeFixture(
+        root,
+        "apps/mobile/src/features/marketplace/model/plugin-catalog.generated.ts",
+        'export const MOBILE_PLUGINS = [{ slug: "robinhood" }];',
+      );
+
+      const violations = await checkGeneratedCatalogs(root);
+      expect(violations).toHaveLength(2);
+      expect(violations.map((v) => v.match).sort()).toEqual(["coinbase", "robinhood"]);
+    });
+
+    it("allows clean generated catalog files", async () => {
+      await writeFixture(
+        root,
+        "src/renderer/src/features/settings/marketplace-plugin-catalog.ts",
+        'export const MARKETPLACE_PLUGINS = [{ slug: "stripe" }];',
+      );
+      expect(await checkGeneratedCatalogs(root)).toHaveLength(0);
+    });
   });
 
-  it("fails when updates section is missing", () => {
-    const config = { expo: {} };
-    expect(checkMobileUpdatesConfig(config)).toBe(false);
+  describe("checkMobileUpdatesDisabled", () => {
+    it("passes when updates.enabled is false", async () => {
+      await writeFixture(
+        root,
+        "apps/mobile/app.json",
+        JSON.stringify({ expo: { updates: { enabled: false, url: "https://updates.openbot.run/manifest" } } }),
+      );
+      expect(await checkMobileUpdatesDisabled(root)).toHaveLength(0);
+    });
+
+    it("fails when updates.enabled is true", async () => {
+      await writeFixture(
+        root,
+        "apps/mobile/app.json",
+        JSON.stringify({ expo: { updates: { enabled: true, url: "https://updates.openbot.run/manifest" } } }),
+      );
+      const violations = await checkMobileUpdatesDisabled(root);
+      expect(violations).toHaveLength(1);
+    });
+
+    it("fails when updates.enabled is missing or updates section is missing", async () => {
+      await writeFixture(
+        root,
+        "apps/mobile/app.json",
+        JSON.stringify({ expo: { updates: { url: "https://updates.openbot.run/manifest" } } }),
+      );
+      expect(await checkMobileUpdatesDisabled(root)).toHaveLength(1);
+
+      await writeFixture(root, "apps/mobile/app.json", JSON.stringify({ expo: {} }));
+      expect(await checkMobileUpdatesDisabled(root)).toHaveLength(1);
+    });
+
+    it("fails closed when app.json is missing or invalid JSON", async () => {
+      const missingViolations = await checkMobileUpdatesDisabled(root);
+      expect(missingViolations).toHaveLength(1);
+      expect(missingViolations[0]?.label).toContain("missing or unreadable");
+
+      await writeFixture(root, "apps/mobile/app.json", "{ invalid json");
+      const invalidViolations = await checkMobileUpdatesDisabled(root);
+      expect(invalidViolations).toHaveLength(1);
+      expect(invalidViolations[0]?.label).toContain("invalid JSON");
+    });
   });
 });
