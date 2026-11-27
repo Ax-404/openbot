@@ -43,6 +43,8 @@ const FORBIDDEN_PATTERNS: readonly ForbiddenPattern[] = [
 const FORBIDDEN_PLUGIN_DIRS = ["coinbase", "robinhood"];
 
 const NEAR_INTENTS_ACTIVE_PATTERN = /owners:\s*\(\)\s*=>\s*OWNERS\.filter/;
+const ELECTRON_BUILDER_PUBLISH_NULL_PATTERN = /^publish:\s*null\s*$/m;
+const ELECTRON_BUILDER_UPSTREAM_PATTERN = /nightly-labs/i;
 
 const EXCLUDED_PATHS = [
   "scripts/fork-privacy-guard.ts",
@@ -270,6 +272,41 @@ export async function checkMobileUpdatesDisabled(root: string): Promise<Violatio
   return [];
 }
 
+export async function checkElectronBuilderConfig(root: string): Promise<Violation[]> {
+  const configPath = join(root, "electron-builder.yml");
+  let content: string;
+  try {
+    content = await readFile(configPath, "utf8");
+  } catch (error: unknown) {
+    return [
+      {
+        file: configPath,
+        line: 0,
+        label: "electron-builder.yml is missing or unreadable",
+        match: error instanceof Error ? error.message : String(error),
+      },
+    ];
+  }
+  const violations: Violation[] = [];
+  if (ELECTRON_BUILDER_UPSTREAM_PATTERN.test(content)) {
+    violations.push({
+      file: configPath,
+      line: 0,
+      label: "electron-builder.yml must not reference nightly-labs",
+      match: "nightly-labs",
+    });
+  }
+  if (!ELECTRON_BUILDER_PUBLISH_NULL_PATTERN.test(content)) {
+    violations.push({
+      file: configPath,
+      line: 0,
+      label: "electron-builder.yml must explicitly set publish: null",
+      match: "publish not null",
+    });
+  }
+  return violations;
+}
+
 function log(message: string): void {
   process.stdout.write(`${message}\n`);
 }
@@ -293,6 +330,7 @@ async function main(): Promise<void> {
   violations.push(...(await checkGeneratedCatalogs(root)));
   violations.push(...(await checkNearIntentsActive(root)));
   violations.push(...(await checkMobileUpdatesDisabled(root)));
+  violations.push(...(await checkElectronBuilderConfig(root)));
 
   if (violations.length === 0) {
     log("No privacy violations found.");

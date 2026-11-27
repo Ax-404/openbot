@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  checkElectronBuilderConfig,
   checkGeneratedCatalogs,
   checkMobileUpdatesDisabled,
   checkNearIntentsActive,
@@ -236,6 +237,37 @@ describe("fork-privacy-guard", () => {
       const invalidViolations = await checkMobileUpdatesDisabled(root);
       expect(invalidViolations).toHaveLength(1);
       expect(invalidViolations[0]?.label).toContain("invalid JSON");
+    });
+  });
+
+  describe("checkElectronBuilderConfig", () => {
+    it("passes when publish is explicitly null without nightly-labs", async () => {
+      await writeFixture(root, "electron-builder.yml", "appId: app.openbot.desktop\npublish: null\n");
+      expect(await checkElectronBuilderConfig(root)).toHaveLength(0);
+    });
+
+    it("fails when publish points to nightly-labs", async () => {
+      await writeFixture(
+        root,
+        "electron-builder.yml",
+        "appId: app.openbot.desktop\npublish:\n  provider: github\n  owner: nightly-labs\n  repo: openbot\n",
+      );
+      const violations = await checkElectronBuilderConfig(root);
+      expect(violations.length).toBeGreaterThanOrEqual(1);
+      expect(violations.some((v) => v.match === "nightly-labs")).toBe(true);
+    });
+
+    it("fails when publish: null is omitted", async () => {
+      await writeFixture(root, "electron-builder.yml", "appId: app.openbot.desktop\n");
+      const violations = await checkElectronBuilderConfig(root);
+      expect(violations).toHaveLength(1);
+      expect(violations[0]?.match).toBe("publish not null");
+    });
+
+    it("fails closed when electron-builder.yml is missing", async () => {
+      const violations = await checkElectronBuilderConfig(root);
+      expect(violations).toHaveLength(1);
+      expect(violations[0]?.label).toContain("missing or unreadable");
     });
   });
 });
