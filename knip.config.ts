@@ -14,6 +14,8 @@ const config: KnipConfig = {
     "packages/contracts/src/team-protocol/provider-aware-codec.ts": ["exports", "types"],
     "src/backend/migrations/[0-9]*.ts": ["exports"],
     "apps/auth-api/src/lib/plugin-catalog.generated.ts": ["exports", "types"],
+    "apps/browser-extension/src/client-browser-messages.ts": ["exports"],
+    "apps/mobile/src/features/analytics/events.ts": ["exports"],
   },
   ignoreBinaries: [
     "xterm",

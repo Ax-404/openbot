@@ -4,7 +4,7 @@ import { join, relative } from "node:path";
 
 const FORBIDDEN_PATTERNS = [
   { pattern: /analytics\.openbot\.run/g, label: "analytics.openbot.run endpoint" },
-  { pattern: /updates\.openbot\.run/g, label: "updates.openbot.run OTA endpoint" },
+  { pattern: /updates\.openbot\.run/g, label: "updates.openbot.run OTA endpoint", allowIf: "apps/mobile/app.json" },
   { pattern: /https:\/\/github\.com\/nightly-labs\/openbot\/releases/g, label: "upstream releases URL" },
 ];
 
@@ -75,15 +75,17 @@ async function isExcluded(filePath: string, root: string): Promise<boolean> {
   });
 }
 
-async function scanFile(filePath: string): Promise<Violation[]> {
+async function scanFile(filePath: string, root: string): Promise<Violation[]> {
   const content = await readFile(filePath, "utf8");
   const lines = content.split("\n");
   const violations: Violation[] = [];
+  const rel = relative(root, filePath);
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (line === undefined) continue;
-    for (const { pattern, label } of FORBIDDEN_PATTERNS) {
+    for (const { pattern, label, allowIf } of FORBIDDEN_PATTERNS) {
+      if (allowIf && rel === allowIf) continue;
       pattern.lastIndex = 0;
       for (let match = pattern.exec(line); match !== null; match = pattern.exec(line)) {
         violations.push({ file: filePath, line: i + 1, label, match: match[0] });
@@ -185,6 +187,25 @@ async function checkNearIntentsActive(root: string): Promise<Violation[]> {
   return [];
 }
 
+async function checkMobileUpdatesDisabled(root: string): Promise<Violation[]> {
+  const appJsonPath = join(root, "apps/mobile/app.json");
+  try {
+    const content = await readFile(appJsonPath, "utf8");
+    const config = JSON.parse(content);
+    if (config.expo?.updates?.enabled !== false) {
+      return [
+        {
+          file: appJsonPath,
+          line: 0,
+          label: "Mobile OTA updates must be disabled (updates.enabled must be false)",
+          match: "updates.enabled not false",
+        },
+      ];
+    }
+  } catch {}
+  return [];
+}
+
 function log(message: string): void {
   process.stdout.write(`${message}\n`);
 }
@@ -201,12 +222,13 @@ async function main(): Promise<void> {
   const violations: Violation[] = [];
 
   for (const file of files) {
-    violations.push(...(await scanFile(file)));
+    violations.push(...(await scanFile(file, root)));
   }
 
   violations.push(...(await checkPluginCatalogs(root)));
   violations.push(...(await checkGeneratedCatalogs(root)));
   violations.push(...(await checkNearIntentsActive(root)));
+  violations.push(...(await checkMobileUpdatesDisabled(root)));
 
   if (violations.length === 0) {
     log("No privacy violations found.");

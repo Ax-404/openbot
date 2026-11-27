@@ -2,9 +2,9 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-const FORBIDDEN_PATTERNS = [
+const FORBIDDEN_PATTERNS: Array<{ pattern: RegExp; label: string; allowIf?: string }> = [
   { pattern: /analytics\.openbot\.run/g, label: "analytics.openbot.run endpoint" },
-  { pattern: /updates\.openbot\.run/g, label: "updates.openbot.run OTA endpoint" },
+  { pattern: /updates\.openbot\.run/g, label: "updates.openbot.run OTA endpoint", allowIf: "apps/mobile/app.json" },
   { pattern: /https:\/\/github\.com\/nightly-labs\/openbot\/releases/g, label: "upstream releases URL" },
 ];
 
@@ -148,5 +148,31 @@ export const MARKETPLACE_PLUGINS = [STRIPE];
     const contentLower = content.toLowerCase();
     const hasForbidden = FORBIDDEN_PLUGIN_DIRS.some((dir) => contentLower.includes(dir));
     expect(hasForbidden).toBe(false);
+  });
+});
+
+describe("fork-privacy-guard mobile updates check", () => {
+  function checkMobileUpdatesConfig(config: { expo?: { updates?: { enabled?: boolean } } }): boolean {
+    return config.expo?.updates?.enabled === false;
+  }
+
+  it("passes when updates.enabled is false", () => {
+    const config = { expo: { updates: { enabled: false, url: "https://updates.openbot.run/manifest" } } };
+    expect(checkMobileUpdatesConfig(config)).toBe(true);
+  });
+
+  it("fails when updates.enabled is true", () => {
+    const config = { expo: { updates: { enabled: true, url: "https://updates.openbot.run/manifest" } } };
+    expect(checkMobileUpdatesConfig(config)).toBe(false);
+  });
+
+  it("fails when updates.enabled is missing", () => {
+    const config = { expo: { updates: { url: "https://updates.openbot.run/manifest" } } };
+    expect(checkMobileUpdatesConfig(config)).toBe(false);
+  });
+
+  it("fails when updates section is missing", () => {
+    const config = { expo: {} };
+    expect(checkMobileUpdatesConfig(config)).toBe(false);
   });
 });
